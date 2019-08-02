@@ -413,7 +413,8 @@ impl Generator {
                 LE::write_u16(&mut buf[14..], (self.time >> 16) as u16);
                 LE::write_u16(&mut buf[16..], (self.time >> 32) as u16);
                 buf[18..42].copy_from_slice(&[0; 24]);
-                for n in 0..nevents {
+                let mut offset = 42 + 2;
+                for _ in 0..nevents {
                     let (y, x) = loop {
                         let random = read_rand();
                         let y = (random >> 22) as u16;
@@ -421,8 +422,9 @@ impl Generator {
                             break (y, random as u16 & 0b11100111);
                         }
                     };
-                    LE::write_u16(&mut buf[42+6*n+2..], y << 3);
-                    LE::write_u16(&mut buf[42+6*n+4..], x << 7);
+                    LE::write_u16(&mut buf[offset..], y << 3);
+                    LE::write_u16(&mut buf[offset+2..], x << 7);
+                    offset += 6;
                 }
                 self.lastpkt = self.time - (elapsed % self.interval) as u64;
                 self.npkt[nevents] += 1;

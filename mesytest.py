@@ -47,7 +47,7 @@ time.sleep(dt)
 send_cmd(sock, addr, 0, 'H', 0, reply=False)
 thread.join()
 
-print('got: %s packets with %s events => %.0f ev/s [set: %.0f], %.0f ev/pkt, %.2f MB/s' %
+print('got: %s packets with %s events => %.0f ev/s [set: %.0f], %.0f ev/pkt, %.1f MB/s' %
       (result.npackets,
        result.nevents,
        result.nevents / result.endtime,
