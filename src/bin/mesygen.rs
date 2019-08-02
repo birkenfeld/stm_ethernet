@@ -395,7 +395,6 @@ impl Generator {
         }
         let mut nevents = (elapsed / self.interval) as usize;
         if nevents > MAX_PER_PKT {
-            info!("too many events for single packet, limiting...");
             nevents = MAX_PER_PKT;
         }
 
