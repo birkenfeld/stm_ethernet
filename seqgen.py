@@ -1,25 +1,31 @@
-import socket
 import sys
+import socket
+import struct
 import time
 
 addr = sys.argv[1]
 
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.bind(('', 12345))
-s.sendto('start', (addr, 50000))
-t0 = None
-ll = []
-pktl = 0
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(('', 12345))
 
-for i in range(10*1000):
-    b, _ = s.recvfrom(2000)
+t0 = None
+seq_nos = []
+packet_len = 0
+
+sock.sendto(b'start', (addr, 50000))
+
+for _ in range(10*1000):
+    data, _ = sock.recvfrom(2000)
     if t0 is None:
-        print 'start'
-        pktl = len(b) + 66
         t0 = time.time()
-    n = ord(b[0])<<24 | ord(b[1])<<16 | ord(b[2])<<8 | ord(b[3])
-    ll.append(n)
-s.sendto('stop', (addr, 50000))
-t = time.time() - t0
-print 'Took %.3f s to receive 10M pkts (%.1f MBit/s)' % (t, pktl/12.5/t)
-assert ll == range(10*1000)
+        print('started')
+        # 66 bytes are Ethernet/IP/UDP overhead
+        packet_len = len(data) + 66
+    seq_nos.append(struct.unpack('>I', data[:4])[0])
+
+total_time = time.time() - t0
+sock.sendto(b'stop', (addr, 50000))
+
+print('Took %.3f s to receive 10M pkts (%.1f MBit/s)' %
+      (total_time, packet_len/12.5/total_time))
+assert seq_nos == list(range(10*1000))

@@ -1,2 +1,3 @@
 itm.fifo
 target/
+*.pyc

@@ -1,44 +1,56 @@
-import os
 import sys
 import socket
-import time
+import struct
 import threading
+import time
+
+from mesylib import PORT, send_cmd
 
 try:
     addr = sys.argv[1]
     rate = int(sys.argv[2])
     dt = float(sys.argv[3])
-except:
-    print 'usage: mesytest.py ipaddr rate meastime'
+except (ValueError, IndexError):
+    print('usage: mesytest.py ipaddr rate meastime')
     sys.exit(1)
 
-os.system('python mesyparams.py %s %s' % (addr, rate))
+sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock.bind(('', PORT))
+send_cmd(sock, addr, 0xF1F0, 'IH', rate, 0)
+print('configure ok')
 
-n = [0, 0, 0, 0]
 
-s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-s.bind(('', 54321))
-s.sendto('\x00\x00\x00\x01\x00\x00\x00\x00' + '\x01\x00' + '\x00' * 10, (addr, 54321))
-s.recvfrom(2000)
+class result:
+    npackets = 0
+    nevents = 0
+    nbytes = 0
+    endtime = 0
+
 
 def get():
     while True:
-        d, _ = s.recvfrom(2000)
-        if d[3] == '\x01':
-            d = map(ord, d)
-            n[2] = d[12] | (d[13] << 8) | (d[14] << 16) | (d[15] << 24) | (d[16] << 32) | (d[17] << 40)
-            return
-        n[0] += 1
-        blen = ord(d[0]) | (ord(d[1]) << 8)
-        n[1] += (blen - 21) / 3
-        n[3] += len(d) + 66  # Eth/IP/UDP headers
+        data, _ = sock.recvfrom(2000)
+        if data[3:4] == b'\x80':  # command reply, i.e. "stop acknowledged"
+            t1, t2 = struct.unpack('IH', data[12:18])
+            result.endtime = (t1 | (t2 << 32)) / 1e7
+            break
+        result.npackets += 1
+        nwords = ord(data[0:1]) | (ord(data[1:2]) << 8)
+        result.nevents += (nwords - 21) / 3
+        result.nbytes += len(data) + 66  # Eth/IP/UDP headers
 
-t = threading.Thread(target=get)
-t.setDaemon(True)
-t.start()
+
+thread = threading.Thread(target=get)
+send_cmd(sock, addr, 1, 'H', 0)
+thread.start()
 time.sleep(dt)
-s.sendto('\x00\x00\x00\x01' + '\x00' * 16, (addr, 54321))
-t.join()
+send_cmd(sock, addr, 0, 'H', 0, reply=False)
+thread.join()
 
-print 'got: %s packets with %s events => %.0f ev/s [set: %.0f], %.0f ev/pkt, %.2f MB/s' % \
-    (n[0], n[1], n[1]/(n[2] / 1e7), 10000000//(10000000//rate), n[1]/float(n[0]), (n[3])/float(n[2] / 10.))
+print('got: %s packets with %s events => %.0f ev/s [set: %.0f], %.0f ev/pkt, %.2f MB/s' %
+      (result.npackets,
+       result.nevents,
+       result.nevents / result.endtime,
+       10000000 // (10000000 // rate),
+       result.nevents / float(result.npackets),
+       result.nbytes / float(result.endtime * 1e6)))
