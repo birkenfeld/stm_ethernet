@@ -5,5 +5,5 @@
 # https://github.com/texane/stlink
 
 BIN=${1:-target/thumbv7em-none-eabihf/release/mesygen}
-arm-none-eabi-objcopy -Obinary "$BIN" "$BIN.bin"
+objcopy -Obinary "$BIN" "$BIN.bin"
 st-flash write "$BIN.bin" 0x08000000

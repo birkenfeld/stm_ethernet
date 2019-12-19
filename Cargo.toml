@@ -11,10 +11,10 @@ edition = "2018"
 log = "0.4"
 arrayvec = { version = "0.5", default-features = false }
 byteorder = { version = "1.2", default-features = false }
-cortex-m = "0.5"
+cortex-m = "0.6"
 cortex-m-rt = "0.6"
 panic-itm = "0.4"
-stm32f4xx-hal = { version = "0.4", features = ["rt", "stm32f429"] }
+stm32f4xx-hal = { version = "0.5", features = ["rt", "stm32f429"] }
 stm32-eth = { git = "https://github.com/birkenfeld/stm32-eth", features = ["smoltcp-phy", "nucleo-f429zi"] }
 #stm32-eth = { path = "../stm32-eth", features = ["smoltcp-phy", "nucleo-f429zi"] }
 
