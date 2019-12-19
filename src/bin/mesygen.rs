@@ -1,6 +1,5 @@
 #![no_std]
 #![no_main]
-#![feature(cell_update)]
 
 extern crate panic_itm;
 
@@ -558,5 +557,8 @@ fn read_rand() -> u32 {
 
 #[exception]
 fn SysTick() {
-    interrupt::free(|cs| ETH_TIME.borrow(cs).update(|v| v.wrapping_add(1)));
+    interrupt::free(|cs| {
+        let time = ETH_TIME.borrow(cs);
+        time.set(time.get().wrapping_add(1));
+    });
 }
