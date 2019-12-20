@@ -32,6 +32,8 @@ const MAX_PER_PKT: usize = 234;
 const EVENTS_PER_PKT: u32 = 220;
 // maximum interval between packets: 20 ms
 const MAX_INTERVAL: u32 = 200_000;
+// minimum interval between packets to avoid complete buffer saturation
+const MIN_INTERVAL: u32 = 1_215;
 
 struct ItmLogger;
 
@@ -348,6 +350,8 @@ impl Generator {
                 self.pkt_interval = self.interval * EVENTS_PER_PKT;
                 if self.pkt_interval > MAX_INTERVAL {
                     self.pkt_interval = MAX_INTERVAL;
+                } else if self.pkt_interval < MIN_INTERVAL {
+                    self.pkt_interval = MIN_INTERVAL;
                 }
                 info!("Configure: set rate to {}/s, events/packet to {}",
                       10_000_000 / self.interval, self.pkt_interval / self.interval);
@@ -385,7 +389,7 @@ impl Generator {
         // keep track of 64-bit time
         let low_time = self.timer.cnt.read().bits();
         let overflow = if low_time < self.time as u32 { 1 << 32 } else { 0 };
-        self.time = ((self.time & 0xFFFFFFFF00000000) + overflow) | low_time as u64;
+        self.time = ((self.time & 0xFFFF_FFFF_0000_0000) + overflow) | low_time as u64;
 
         // calculate time since last packet
         let elapsed = (self.time - self.lastpkt) as u32;
