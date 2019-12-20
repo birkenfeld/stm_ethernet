@@ -340,6 +340,29 @@ impl Generator {
                     body.push(0);
                 }
             }
+            13 => { // set gain
+                info!("set gain: {:?}", req_body);
+                body.push(req_body[0]);
+                body.push(req_body[1]);
+                if req_body[1] == 8 {
+                    for i in 2..10 {
+                        body.push(req_body[i]);
+                    }
+                }
+                else {
+                    body.push(req_body[2]);
+                }
+            }
+            14 => { // set threshhold
+                info!("Set threshhold: {:?}", req_body);
+                body.push(req_body[0]);
+                body.push(req_body[1]);
+            }
+            16 => { // set mode
+                info!("Set threshhold: {:?}", req_body);
+                body.push(req_body[0]);
+                body.push(req_body[1]);
+            }
             0xF1F0 => { // generator parameters -- generator specific command
                 let rate = (req_body[1] as u32) << 16 | req_body[0] as u32;
                 if rate == 0 {
