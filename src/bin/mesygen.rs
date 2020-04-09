@@ -556,7 +556,7 @@ fn setup_rng(p: &Peripherals) {
 
 fn setup_10mhz(p: &Peripherals) {
     p.RCC.apb1enr.modify(|_, w| w.tim2en().set_bit());
-    p.TIM2.psc.write(|w| unsafe { w.psc().bits(8) }); // 90 MHz/9
+    p.TIM2.psc.write(|w| w.psc().bits(8)); // 90 MHz/9
     p.TIM2.egr.write(|w| w.ug().set_bit());
 }
 
