@@ -9,6 +9,8 @@ use cortex_m_rt::{entry, exception};
 use stm32f4xx_hal::{
     gpio::GpioExt,
     stm32::{Peripherals, CorePeripherals, SYST},
+    time::U32Ext,
+    rcc::RccExt,
 };
 
 use core::cell::Cell;
@@ -21,7 +23,7 @@ use smoltcp::storage::PacketMetadata;
 use smoltcp::dhcp::Dhcpv4Client;
 use log::{Record, Metadata, LevelFilter, info, warn};
 
-use stm32_eth::{Eth, RingEntry};
+use stm32_eth::{Eth, EthPins, PhyAddress, RingEntry};
 
 struct ItmLogger;
 
@@ -52,25 +54,36 @@ fn main() -> ! {
     let p = Peripherals::take().unwrap();
     let mut cp = CorePeripherals::take().unwrap();
 
-    setup_clock(&p);
+    let rcc = p.RCC.constrain();
+    let clocks = rcc.cfgr.sysclk(180.mhz()).hclk(180.mhz()).freeze();
+
     setup_systick(&mut cp.SYST);
-    stm32_eth::setup(&p.RCC, &p.SYSCFG);
 
     let gpioa = p.GPIOA.split();
     let gpiob = p.GPIOB.split();
     let gpioc = p.GPIOC.split();
     let gpiog = p.GPIOG.split();
-    stm32_eth::setup_pins(
-        gpioa.pa1, gpioa.pa2, gpioa.pa7, gpiob.pb13, gpioc.pc1,
-        gpioc.pc4, gpioc.pc5, gpiog.pg11, gpiog.pg13
-    );
+    let pins = EthPins {
+        ref_clk: gpioa.pa1,
+        md_io: gpioa.pa2,
+        md_clk: gpioc.pc1,
+        crs: gpioa.pa7,
+        tx_en: gpiog.pg11,
+        tx_d0: gpiog.pg13,
+        tx_d1: gpiob.pb13,
+        rx_d0: gpioc.pc4,
+        rx_d1: gpioc.pc5,
+    };
 
     let mut rx_ring: [RingEntry<_>; 16] = Default::default();
     let mut tx_ring: [RingEntry<_>; 4] = Default::default();
     let mut eth = Eth::new(
         p.ETHERNET_MAC, p.ETHERNET_DMA,
-        &mut rx_ring[..], &mut tx_ring[..]
-    );
+        &mut rx_ring[..], &mut tx_ring[..],
+        PhyAddress::_0,
+        clocks,
+        pins
+    ).unwrap();
 
     let serial = read_serno();
     let ethernet_addr = EthernetAddress([
@@ -168,62 +181,6 @@ fn main() -> ! {
             warn!("poll: {}", e);
         }
     }
-}
-
-fn setup_clock(p: &Peripherals) {
-    // setup for 180 MHz, 90 MHz, 45 MHz from 8MHz HSE (Nucleo MCO)
-    let pll_m = 8;
-    let pll_n = 360; // fVCO = 360 MHz
-    let pll_p = 2;
-    let pll_q = 8; // to get <= 48 MHz
-    let flash_latency = 5;
-    let ahb_div  = 0b111;
-    let apb2_div = 0b100; // div2
-    let apb1_div = 0b101; // div4
-
-    // enable HSE
-    p.RCC.cr.modify(|_, w| w.hseon().set_bit());
-    while p.RCC.cr.read().hserdy().bit_is_clear() {}
-
-    // select regulator voltage scale 1
-    p.RCC.apb1enr.modify(|_, w| w.pwren().set_bit());
-    p.PWR.cr.modify(|_, w| unsafe { w.vos().bits(0b11) });
-
-    // configure PLL frequency
-    p.RCC.pllcfgr.modify(|_, w| unsafe { w.pllm().bits(pll_m)
-                                          .plln().bits(pll_n)
-                                          .pllp().bits((pll_p >> 1) - 1)
-                                          .pllq().bits(pll_q)
-                                          .pllsrc().set_bit() });
-
-    // enable PLL
-    p.RCC.cr.modify(|_, w| w.pllon().set_bit());
-    // wait for PLL ready
-    while p.RCC.cr.read().pllrdy().bit_is_clear() {}
-
-    // enable overdrive
-    p.PWR.cr.modify(|_, w| w.oden().set_bit());
-    while p.PWR.csr.read().odrdy().bit_is_clear() {}
-    p.PWR.cr.modify(|_, w| w.odswen().set_bit());
-    while p.PWR.csr.read().odswrdy().bit_is_clear() {}
-
-    // adjust icache and flash wait states
-    p.FLASH.acr.modify(|_, w| unsafe { w.icen().set_bit()
-                                       .dcen().set_bit()
-                                       .prften().set_bit()
-                                       .latency().bits(flash_latency) });
-
-    // enable PLL as clock source
-    p.RCC.cfgr.write(|w| unsafe { w
-                                  // APB high-speed prescaler (APB2)
-                                  .ppre2().bits(apb2_div)
-                                  // APB low-speed prescaler (APB1)
-                                  .ppre1().bits(apb1_div)
-                                  // AHB prescaler
-                                  .hpre().bits(ahb_div)
-                                  // PLL selected as system clock
-                                  .sw().pll() });
-    while !p.RCC.cfgr.read().sws().is_pll() {}
 }
 
 fn setup_systick(syst: &mut SYST) {
