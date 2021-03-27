@@ -240,8 +240,8 @@ impl Generator {
         // parse body: all command buffers end in 0xffff
         let req_body = msg[20..].chunks(2).map(|c| LE::read_u16(c))
                                           .take_while(|&v| v != 0xffff)
-                                          .collect::<ArrayVec<[u16; 32]>>();
-        let mut body = ArrayVec::<[u16; 24]>::new();
+                                          .collect::<ArrayVec<u16, 32>>();
+        let mut body = ArrayVec::<u16, 24>::new();
         let cmd = LE::read_u16(&msg[8..]);
         match cmd {
             22 => { // get MCPD-8 capabilities and mode
