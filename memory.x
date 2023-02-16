@@ -6,6 +6,3 @@ MEMORY
   RAM3 (xrw)      : ORIGIN = 0x20020000, LENGTH = 64K
   CCMRAM (rw)     : ORIGIN = 0x10000000, LENGTH = 64K
 }
-
-_stack_start = ORIGIN(RAM) + LENGTH(RAM);
-_heap_size = LENGTH(RAM) - 4K;
