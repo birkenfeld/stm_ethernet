@@ -1,9 +1,11 @@
 #![no_std]
 #![no_main]
 
-extern crate panic_itm;
+use defmt_rtt as _;
+use panic_probe as _;
+use defmt::{info, warn};
 
-use cortex_m::{iprintln, interrupt, peripheral};
+use cortex_m::interrupt;
 use cortex_m::interrupt::Mutex;
 use cortex_m_rt::{entry, exception};
 use stm32f4xx_hal::{
@@ -23,7 +25,6 @@ use smoltcp::iface::{SocketSet, Config, Interface, SocketStorage};
 use smoltcp::socket::udp::{Socket as UdpSocket, PacketBuffer as UdpPacketBuffer};
 use smoltcp::socket::dhcpv4::{Socket as DhcpSocket, Event as DhcpEvent};
 use smoltcp::storage::PacketMetadata;
-use log::{Record, Metadata, LevelFilter, info, warn};
 
 use stm32_eth::{dma::{RxRingEntry, TxRingEntry}, Parts, PartsIn, EthPins};
 
@@ -37,32 +38,10 @@ const MAX_INTERVAL: u32 = 200_000;
 // minimum interval between packets to avoid complete buffer saturation
 const MIN_INTERVAL: u32 = 1_215;
 
-struct ItmLogger;
-
-fn itm() -> &'static mut peripheral::itm::Stim {
-    unsafe { &mut (*peripheral::ITM::PTR).stim[0] }
-}
-
-impl log::Log for ItmLogger {
-    fn log(&self, record: &Record) {
-        iprintln!(itm(), "[{}] {}", record.level(), record.args());
-    }
-
-    fn enabled(&self, _: &Metadata) -> bool { true }
-    fn flush(&self) {}
-}
-
-static LOGGER: ItmLogger = ItmLogger;
 static ETH_TIME: Mutex<Cell<i64>> = Mutex::new(Cell::new(0));
 
 #[entry]
 fn main() -> ! {
-    // enable logging if someone is listening on ITM
-    if itm().is_fifo_ready() {
-        log::set_logger(&LOGGER).unwrap();
-        log::set_max_level(LevelFilter::Info);
-    }
-
     let p = Peripherals::take().unwrap();
     let mut cp = CorePeripherals::take().unwrap();
 
@@ -477,7 +456,7 @@ impl Generator {
         let npkt = self.npkt.iter().sum::<u32>();
         let nevt = self.npkt.iter().enumerate().map(|(i, &n)| i as u64 * n as u64).sum::<u64>();
         info!("generated {} pkts, {} evts in {} ticks", npkt, nevt, self.time);
-        info!("event rate: {:.0}/s", nevt as f64 / (self.time as f64 / 10_000_000.));
+        info!("event rate: {}/s", nevt as f64 / (self.time as f64 / 10_000_000.));
         info!("per size:");
         for (sz, &n) in self.npkt.iter().enumerate() {
             if n != 0 {
