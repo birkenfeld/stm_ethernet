@@ -7,28 +7,28 @@ use cortex_m::{iprintln, interrupt, peripheral};
 use cortex_m::interrupt::Mutex;
 use cortex_m_rt::{entry, exception};
 use stm32f4xx_hal::{
+    prelude::*,
     gpio::GpioExt,
-    stm32::{Peripherals, CorePeripherals, SYST},
-    time::U32Ext,
+    pac::{Peripherals, CorePeripherals, SYST},
     rcc::RccExt,
 };
 
 use core::cell::Cell;
 
 use smoltcp::time::Instant;
-use smoltcp::wire::{EthernetAddress, Ipv4Address, IpCidr};
-use smoltcp::iface::{NeighborCache, EthernetInterfaceBuilder, Routes};
-use smoltcp::socket::{SocketSet, UdpSocket, UdpSocketBuffer, RawSocketBuffer};
+use smoltcp::wire::EthernetAddress;
+use smoltcp::iface::{SocketSet, Config, Interface, SocketStorage};
+use smoltcp::socket::udp::{Socket as UdpSocket, PacketBuffer as UdpPacketBuffer};
+use smoltcp::socket::dhcpv4::{Socket as DhcpSocket, Event as DhcpEvent};
 use smoltcp::storage::PacketMetadata;
-use smoltcp::dhcp::Dhcpv4Client;
-use log::{Record, Metadata, LevelFilter, info, warn};
+use log::{Record, Metadata, LevelFilter, info};
 
-use stm32_eth::{Eth, EthPins, PhyAddress, RingEntry};
+use stm32_eth::{dma::{RxRingEntry, TxRingEntry}, Parts, PartsIn, EthPins};
 
 struct ItmLogger;
 
 fn itm() -> &'static mut peripheral::itm::Stim {
-    unsafe { &mut (*peripheral::ITM::ptr()).stim[0] }
+    unsafe { &mut (*peripheral::ITM::PTR).stim[0] }
 }
 
 impl log::Log for ItmLogger {
@@ -55,7 +55,7 @@ fn main() -> ! {
     let mut cp = CorePeripherals::take().unwrap();
 
     let rcc = p.RCC.constrain();
-    let clocks = rcc.cfgr.sysclk(180.mhz()).hclk(180.mhz()).freeze();
+    let clocks = rcc.cfgr.sysclk(180.MHz()).hclk(180.MHz()).freeze();
 
     setup_systick(&mut cp.SYST);
 
@@ -65,8 +65,6 @@ fn main() -> ! {
     let gpiog = p.GPIOG.split();
     let pins = EthPins {
         ref_clk: gpioa.pa1,
-        md_io: gpioa.pa2,
-        md_clk: gpioc.pc1,
         crs: gpioa.pa7,
         tx_en: gpiog.pg11,
         tx_d0: gpiog.pg13,
@@ -74,53 +72,47 @@ fn main() -> ! {
         rx_d0: gpioc.pc4,
         rx_d1: gpioc.pc5,
     };
+    let mdio = gpioa.pa2.into_alternate();
+    let mdc = gpioc.pc1.into_alternate();
 
-    let mut rx_ring: [RingEntry<_>; 16] = Default::default();
-    let mut tx_ring: [RingEntry<_>; 4] = Default::default();
-    let mut eth = Eth::new(
-        p.ETHERNET_MAC, p.ETHERNET_DMA,
-        &mut rx_ring[..], &mut tx_ring[..],
-        PhyAddress::_0,
+    let mut rx_ring: [RxRingEntry; 16] = Default::default();
+    let mut tx_ring: [TxRingEntry; 4] = Default::default();
+    let Parts { mut dma, .. } = stm32_eth::new_with_mii(
+        PartsIn { dma: p.ETHERNET_DMA, mac: p.ETHERNET_MAC, mmc: p.ETHERNET_MMC, ptp: p.ETHERNET_PTP },
+        &mut rx_ring[..],
+        &mut tx_ring[..],
         clocks,
-        pins
+        pins,
+        mdio,
+        mdc,
     ).unwrap();
+    // dma.enable_interrupt();
 
     let serial = read_serno();
     let ethernet_addr = EthernetAddress([
         0x46, 0x52, 0x4d,  // F R M
         (serial >> 16) as u8, (serial >> 8) as u8, serial as u8
     ]);
-    let mut ip_addrs = [IpCidr::new(Ipv4Address::UNSPECIFIED.into(), 0)];
-    let mut neighbor_storage = [None; 16];
-    let mut routes_storage = [None; 2];
-    let mut iface = EthernetInterfaceBuilder::new(&mut eth)
-        .ethernet_addr(ethernet_addr)
-        .ip_addrs(&mut ip_addrs[..])
-        .neighbor_cache(NeighborCache::new(&mut neighbor_storage[..]))
-        .routes(Routes::new(&mut routes_storage[..]))
-        .finalize();
+    let mut config = Config::new();
+    config.hardware_addr = Some(ethernet_addr.into());
+    let mut iface = Interface::new(config, &mut &mut dma);
 
     let mut udp_rx_meta_buffer = [PacketMetadata::EMPTY; 4];
     let mut udp_tx_meta_buffer = [PacketMetadata::EMPTY; 4];
     let mut udp_rx_data_buffer = [0; 1500*4];
     let mut udp_tx_data_buffer = [0; 1500*4];
-    let mut dhcp_rx_meta_buffer = [PacketMetadata::EMPTY; 1];
-    let mut dhcp_tx_meta_buffer = [PacketMetadata::EMPTY; 1];
-    let mut dhcp_rx_data_buffer = [0; 1500];
-    let mut dhcp_tx_data_buffer = [0; 1500*2];
 
     let udp_socket = UdpSocket::new(
-        UdpSocketBuffer::new(&mut udp_rx_meta_buffer[..], &mut udp_rx_data_buffer[..]),
-        UdpSocketBuffer::new(&mut udp_tx_meta_buffer[..], &mut udp_tx_data_buffer[..])
+        UdpPacketBuffer::new(&mut udp_rx_meta_buffer[..], &mut udp_rx_data_buffer[..]),
+        UdpPacketBuffer::new(&mut udp_tx_meta_buffer[..], &mut udp_tx_data_buffer[..])
     );
-    let mut sockets_storage = [None, None];
+    let mut sockets_storage = [SocketStorage::EMPTY, SocketStorage::EMPTY];
     let mut sockets = SocketSet::new(&mut sockets_storage[..]);
 
-    let dhcp_rx_buffer = RawSocketBuffer::new(&mut dhcp_rx_meta_buffer[..], &mut dhcp_rx_data_buffer[..]);
-    let dhcp_tx_buffer = RawSocketBuffer::new(&mut dhcp_tx_meta_buffer[..], &mut dhcp_tx_data_buffer[..]);
-    let mut dhcp = Dhcpv4Client::new(&mut sockets, dhcp_rx_buffer, dhcp_tx_buffer, Instant::from_millis(0));
+    let dhcp_socket = DhcpSocket::new();
 
     let udp_handle = sockets.add(udp_socket);
+    let dhcp_handle = sockets.add(dhcp_socket);
 
     let mut target = None;
     let mut seq_number = 0u32;
@@ -131,30 +123,30 @@ fn main() -> ! {
     // so we don't run into the 10sec DHCP discover interval
     while interrupt::free(|cs| ETH_TIME.borrow(cs).get()) < 2000 { }
 
-    let mut got_offer = false;
     loop {
         let time = Instant::from_millis(interrupt::free(|cs| ETH_TIME.borrow(cs).get()));
-        if let Err(e) = iface.poll(&mut sockets, time) {
-            warn!("poll: {}", e);
-        }
-        match dhcp.poll(&mut iface, &mut sockets, time) {
-            Err(e) => warn!("dhcp: {}", e),
-            Ok(Some(config)) => if let Some(cidr) = config.address {
-                iface.update_ip_addrs(|a| *a.first_mut().unwrap() = cidr.into());
-                if got_offer {
-                    sockets.get::<UdpSocket>(udp_handle).bind((cidr.address(), 50000)).unwrap();
-                    break;
-                }
-                got_offer = true;
-            },
-            _ => ()
+        iface.poll(time, &mut &mut dma, &mut sockets);
+
+        let event = sockets.get_mut::<DhcpSocket>(dhcp_handle).poll();
+        if let Some(DhcpEvent::Configured(config)) = event {
+            let addr = config.address;
+            iface.update_ip_addrs(|addrs| addrs.push(addr.into()).unwrap());
+
+            if let Some(router) = config.router {
+                iface.routes_mut().add_default_ipv4_route(router).unwrap();
+            } else {
+                iface.routes_mut().remove_default_ipv4_route();
+            }
+
+            sockets.get_mut::<UdpSocket>(udp_handle).bind((addr.address(), 50000)).unwrap();
+            break;
         }
     }
 
     loop {
         // process packets
         {
-            let mut socket = sockets.get::<UdpSocket>(udp_handle);
+            let socket = sockets.get_mut::<UdpSocket>(udp_handle);
             while let Ok((msg, ep)) = socket.recv() {
                 if msg == b"start" {
                     info!("got start message");
@@ -177,9 +169,7 @@ fn main() -> ! {
         }
         // handle ethernet
         let time = Instant::from_millis(interrupt::free(|cs| ETH_TIME.borrow(cs).get()));
-        if let Err(e) = iface.poll(&mut sockets, time) {
-            warn!("poll: {}", e);
-        }
+        iface.poll(time, &mut &mut dma, &mut sockets);
     }
 }
 

@@ -9,18 +9,22 @@ edition = "2018"
 
 [dependencies]
 log = "0.4"
-arrayvec = { version = "0.6", default-features = false }
+arrayvec = { version = "0.7", default-features = false }
 byteorder = { version = "1.2", default-features = false }
-cortex-m = "0.6"
-cortex-m-rt = "0.6"
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.3"
 panic-itm = "0.4"
-stm32f4xx-hal = { version = "0.8", features = ["rt", "stm32f429"] }
-stm32-eth = { version = "0.2", features = ["smoltcp-phy", "stm32f429"] }
+stm32f4xx-hal = { version = "0.14", features = ["rt", "stm32f429"] }
+
+[dependencies.stm32-eth]
+git = "https://github.com/stm32-rs/stm32-eth"
+# version = "0.4.1"
+features = ["smoltcp-phy", "stm32f429"]
 
 [dependencies.smoltcp]
-version = "0.7.0"
+version = "0.9.1"
 default-features = false
-features = ["ethernet", "proto-ipv4", "proto-dhcpv4", "socket-icmp", "socket-udp", "socket-tcp"]
+features = ["medium-ethernet", "proto-ipv4", "proto-dhcpv4", "socket-raw", "socket-icmp", "socket-udp", "socket-tcp", "socket-dhcpv4"]
 
 [profile.release]
 debug = 1
