@@ -72,9 +72,8 @@ fn main() -> ! {
         0x46, 0x52, 0x4d,  // F R M
         (serial >> 16) as u8, (serial >> 8) as u8, serial as u8
     ]);
-    let mut config = Config::new();
-    config.hardware_addr = Some(ethernet_addr.into());
-    let mut iface = Interface::new(config, &mut &mut dma);
+    let config = Config::new(ethernet_addr.into());
+    let mut iface = Interface::new(config, &mut &mut dma, Instant::ZERO);
 
     let mut udp_rx_meta_buffer = [PacketMetadata::EMPTY; 4];
     let mut udp_tx_meta_buffer = [PacketMetadata::EMPTY; 4];

@@ -100,10 +100,8 @@ fn main() -> ! {
         0x46, 0x52, 0x4d,  // F R M
         (serial >> 16) as u8, (serial >> 8) as u8, serial as u8
     ]);
-    let mut config = Config::new();
-    config.hardware_addr = Some(ethernet_addr.into());
-
-    let mut iface = Interface::new(config, &mut &mut dma);
+    let config = Config::new(ethernet_addr.into());
+    let mut iface = Interface::new(config, &mut &mut dma, Instant::ZERO);
     // select the default Mesytec IP if static configuration
     if !use_dhcp {
         iface.update_ip_addrs(|addrs| {
@@ -173,7 +171,7 @@ fn main() -> ! {
         {
             let socket = sockets.get_mut::<UdpSocket>(udp_handle);
             while let Ok((n, ep)) = socket.recv_slice(&mut cmd_buf) {
-                gen.process_command(socket, &cmd_buf[..n], ep);
+                gen.process_command(socket, &cmd_buf[..n], ep.endpoint);
             }
             gen.maybe_send_data(socket);
         }
