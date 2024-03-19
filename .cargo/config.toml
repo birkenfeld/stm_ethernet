@@ -1,10 +1,15 @@
 [target.thumbv7em-none-eabihf]
-runner = 'gdb-multiarch'
+runner = "probe-rs run --chip STM32F429ZITx"
 rustflags = [
   "-C", "link-arg=--nmagic",
   "-C", "link-arg=-Tlink.x",
   "-C", "link-arg=-Tdefmt.x",
+  #"-C", "inline-threshold=5",
+  #"-C", "no-vectorize-loops",
 ]
 
 [build]
 target = "thumbv7em-none-eabihf"
+
+[env]
+DEFMT_LOG = "debug"

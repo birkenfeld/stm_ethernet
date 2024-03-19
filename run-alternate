@@ -1,9 +1,0 @@
-#!/bin/sh
-
-# This is an alternate way to flash and run the project if openocd + gdb
-# is not working for you.  Needs the stlink utility suite from here:
-# https://github.com/texane/stlink
-
-BIN=${1:-target/thumbv7em-none-eabihf/release/mesygen}
-objcopy -Obinary "$BIN" "$BIN.bin"
-st-flash write "$BIN.bin" 0x08000000
