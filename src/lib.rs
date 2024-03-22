@@ -1,5 +1,7 @@
 #![no_std]
 
+pub mod secnode;
+
 use stm32f4xx_hal::{
     gpio::{ErasedPin, Output},
     pac::RNG,
