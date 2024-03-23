@@ -17,7 +17,10 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpCidr, IpAddress};
 use smoltcp::iface::{SocketSet, SocketHandle, Config, Interface, SocketStorage};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState};
+use smoltcp::socket::udp::{Socket as UdpSocket, PacketBuffer as UdpPacketBuffer, UdpMetadata};
 use smoltcp::socket::dhcpv4::{Socket as DhcpSocket, Event as DhcpEvent};
+use smoltcp::wire::DhcpRepr;
+use smoltcp::storage::PacketMetadata;
 
 use stm32_eth::{dma::{EthernetDMA, RxRingEntry, TxRingEntry}, Parts, PartsIn, EthPins};
 
@@ -26,6 +29,13 @@ use stm_ethernet::secnode::{self, SecNode};
 
 const TIME_GRANULARITY: u32 = 1000;  // 1000 Hz granularity
 const PORT: u16 = 10767;
+
+const NTP_PORT: u16 = 123;
+// Simple packet requesting current timestamp
+const NTP_REQUEST: &[u8] = b"\xE3\x00\x06\xEC\x00\x00\x00\x00\x00\x00\x00\x00\
+                             \x31\x4E\x31\x34\x00\x00\x00\x00\x00\x00\x00\x00\
+                             \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+                             \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
 #[rtic::app(
     device = crate::hal::pac,
@@ -41,24 +51,35 @@ mod app {
         monotonics::now().ticks() as i64
     }
 
-    fn get_time(mut epoch: impl rtic::Mutex<T=Option<f64>>) -> usecop::Timestamp {
-        let ticks = monotonics::now().ticks() as f64 / TIME_GRANULARITY as f64;
-        if let Some(epoch) = epoch.lock(|v| *v) {
-            usecop::Timestamp::Abs(epoch + ticks)
-        } else {
-            usecop::Timestamp::Rel(ticks)
+    pub struct Net {
+        sockets: SocketSet<'static>,
+        iface: Interface,
+        dma: EthernetDMA<'static, 'static>,
+        ntp_time: Option<f64>,
+    }
+
+    impl Net {
+        fn poll(&mut self) {
+            let time = Instant::from_millis(millis());
+            self.iface.poll(time, &mut &mut self.dma, &mut self.sockets);
+        }
+
+        fn get_time(&self) -> usecop::Timestamp {
+            let ticks = monotonics::now().ticks() as f64 / TIME_GRANULARITY as f64;
+            if let Some(epoch) = self.ntp_time {
+                usecop::Timestamp::Abs(epoch + ticks)
+            } else {
+                usecop::Timestamp::Rel(ticks)
+            }
         }
     }
 
     #[shared]
     struct Shared {
-        sockets: SocketSet<'static>,
-        iface: Interface,
-        tcp_handle: SocketHandle,
-        dma: EthernetDMA<'static, 'static>,
-        node: SecNode<5>,
+        node: SecNode<1>,
+        net: Net,
+        sock: SocketHandle,
         use_dhcp: bool,
-        ntp_time: Option<f64>,
     }
 
     #[local]
@@ -71,7 +92,7 @@ mod app {
         tx_ring: [TxRingEntry; 4] = [TxRingEntry::INIT; 4],
         rx_buffer: [u8; 1500*16] = [0; 1500*16],
         tx_buffer: [u8; 1500*16] = [0; 1500*16],
-        sockets_storage: [SocketStorage<'static>; 2] = [SocketStorage::EMPTY, SocketStorage::EMPTY],
+        sockets_storage: [SocketStorage<'static>; 2] = [SocketStorage::EMPTY; 2],
     ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let p = cx.device;
@@ -154,79 +175,105 @@ mod app {
         } else {
             start::spawn().unwrap();
         }
-        (Shared { sockets, iface, dma, use_dhcp, node, tcp_handle, ntp_time: None },
+        let net = Net { sockets, iface, dma, ntp_time: None };
+        (Shared { node, net, sock: tcp_handle, use_dhcp },
          Local { leds },
          init::Monotonics(mono))
     }
 
-    #[task(shared = [sockets, iface, dma])]
-    fn dhcp(cx: dhcp::Context) {
-        let dhcp::SharedResources { sockets, iface, dma } = cx.shared;
-
+    #[task(shared = [net])]
+    fn dhcp(mut cx: dhcp::Context) {
         // give the remote partner time to realize the link is up,
         // so we don't run into the 10sec DHCP discover interval
         while millis() < 2000 { }
 
-        (sockets, iface, dma).lock(|sockets, iface, mut dma| {
+        cx.shared.net.lock(|net| {
             info!("Starting DHCP");
             let dhcp_socket = DhcpSocket::new();
-            let dhcp_handle = sockets.add(dhcp_socket);
+            let dhcp_handle = net.sockets.add(dhcp_socket);
+            // let mut ntp_addr = None;
 
             loop {
                 let time = Instant::from_millis(millis());
-                iface.poll(time, &mut dma, sockets);
+                net.iface.poll(time, &mut &mut net.dma, &mut net.sockets);
 
-                let event = sockets.get_mut::<DhcpSocket>(dhcp_handle).poll();
+                let event = net.sockets.get_mut::<DhcpSocket>(dhcp_handle).poll();
                 if let Some(DhcpEvent::Configured(config)) = event {
                     let addr = config.address;
-                    iface.update_ip_addrs(|addrs| addrs.push(addr.into()).unwrap());
+                    net.iface.update_ip_addrs(|addrs| addrs.push(addr.into()).unwrap());
 
                     if let Some(router) = config.router {
-                        iface.routes_mut().add_default_ipv4_route(router).unwrap();
+                        net.iface.routes_mut().add_default_ipv4_route(router).unwrap();
                     } else {
-                        iface.routes_mut().remove_default_ipv4_route();
+                        net.iface.routes_mut().remove_default_ipv4_route();
                     }
 
+                    if let Ok(repr) = DhcpRepr::parse(&config.packet.unwrap()) {
+                        for opt in repr.additional_options {
+                            if opt.kind == 42 {
+                                info!("NTP: {:?}", opt.data);
+                                // ntp_addr = Some(IpAddress::from_bytes(&opt.data));
+                                break;
+                            }
+                        }
+                    }
                     break;
                 }
             }
 
+            // let mut rx_buf = [0; 1500];
+            // let mut tx_buf = [0; 1500];
+            // let mut rx_meta_buf = [PacketMetadata::EMPTY; 1];
+            // let mut tx_meta_buf = [PacketMetadata::EMPTY; 1];
+
+            // let ntp_socket = UdpSocket::new(
+            //     UdpPacketBuffer::new(&mut rx_meta_buf[..], &mut rx_buf[..]),
+            //     UdpPacketBuffer::new(&mut tx_meta_buf[..], &mut tx_buf[..])
+            // );
+            // let mut storage = [SocketStorage::EMPTY];
+            // let mut sockets = SocketSet::new(&mut storage[..]);
+            // sockets.add(ntp_socket);
+
+            // while millis() < 10000 {
+                
+            // }
         });
         start::spawn().unwrap();
     }
 
-    #[task(shared = [sockets, iface, dma, &tcp_handle, &use_dhcp])]
+    #[task(shared = [net, &sock, &use_dhcp])]
     fn start(cx: start::Context) {
-        let start::SharedResources { sockets, iface, dma, tcp_handle, use_dhcp } = cx.shared;
+        let start::SharedResources { mut net, sock, use_dhcp } = cx.shared;
 
-        (sockets, iface, dma).lock(|sockets, iface, dma| {
-            let ip_addr = iface.ipv4_addr().unwrap();
+        net.lock(|net| {
+            let ip_addr = net.iface.ipv4_addr().unwrap();
             info!("IP setup done ({}), binding to {}:{}",
                   if *use_dhcp { "dhcp" } else { "static" }, ip_addr, PORT);
-            {
-                let socket = sockets.get_mut::<TcpSocket>(*tcp_handle);
-                socket.set_nagle_enabled(false);
-                socket.listen(PORT).unwrap();
-            }
-            dma.enable_interrupt();
+
+            let socket = net.sockets.get_mut::<TcpSocket>(*sock);
+            socket.set_nagle_enabled(false);
+            socket.listen(PORT).unwrap();
+
+            net.dma.enable_interrupt();
         });
         poll::spawn_after(500.millis().into()).unwrap();
     }
 
     #[task(binds = ETH, local = [leds, connected: bool = false],
-           shared = [node, sockets, iface, dma, ntp_time, &tcp_handle])]
+           shared = [node, net, &sock])]
     fn eth(cx: eth::Context) {
         let eth::LocalResources { leds, connected } = cx.local;
-        let eth::SharedResources { node, sockets, iface, dma, ntp_time, tcp_handle } = cx.shared;
+        let eth::SharedResources { node, net, sock } = cx.shared;
         let mut buf = [0; 1024];
 
         let _reason = stm32_eth::eth_interrupt_handler();
         // debug!("Got an ethernet interrupt! Reason: {}", _reason);
 
-        (node, sockets, iface, dma).lock(|node, sockets, iface, mut dma| {
-            iface.poll(Instant::from_millis(millis()), &mut dma, sockets);
+        (node, net).lock(|node, net| {
+            net.poll();
 
-            let socket = sockets.get_mut::<TcpSocket>(*tcp_handle);
+            let time = net.get_time();
+            let socket = net.sockets.get_mut::<TcpSocket>(*sock);
 
             if socket.is_active() {
                 if !*connected {
@@ -243,7 +290,6 @@ mod app {
             if let Ok(recv_bytes) = socket.recv_slice(&mut buf) {
                 if recv_bytes > 0 {
                     info!("Got {} bytes", recv_bytes);
-                    let time = get_time(ntp_time);
                     let result = node.process(
                         time, &mut buf[..recv_bytes],
                         0 as usecop::ClientId,
@@ -263,21 +309,21 @@ mod app {
                 warn!("Disconnected... Reopening listening socket.");
             }
 
-            iface.poll(Instant::from_millis(millis()), &mut dma, sockets);
+            net.poll();
         });
     }
 
-    #[task(shared = [sockets, node, iface, dma, ntp_time, &tcp_handle])]
+    #[task(shared = [node, net, &sock])]
     fn poll(cx: poll::Context) {
-        let poll::SharedResources { sockets, node, iface, dma, ntp_time, tcp_handle } = cx.shared;
-        let time = get_time(ntp_time);
+        let poll::SharedResources { node, net, sock } = cx.shared;
 
-        (sockets, node, iface, dma).lock(|sockets, node, iface, mut dma| {
+        (node, net).lock(|node, net| {
+            let time = net.get_time();
             node.poll(time, |_, callback: &dyn Fn(&mut dyn usecop::io::Write)| {
-                let socket = sockets.get_mut::<TcpSocket>(*tcp_handle);
+                let socket = net.sockets.get_mut::<TcpSocket>(*sock);
                 callback(&mut Writer(socket));
             });
-            iface.poll(Instant::from_millis(millis()), &mut dma, sockets);
+            net.poll();
         });
         poll::spawn_after(500.millis().into()).unwrap();
     }
