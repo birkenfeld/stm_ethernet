@@ -771,6 +771,7 @@ dependencies = [
  "defmt-rtt",
  "fugit",
  "panic-probe",
+ "rand_core",
  "smoltcp",
  "stm32-eth",
  "stm32f4xx-hal",

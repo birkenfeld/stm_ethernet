@@ -11,11 +11,13 @@ use stm32f4xx_hal::{
     gpio::GpioExt,
     pac::{Peripherals, TIM2},
     rcc::RccExt,
+    rng::Rng,
 };
 use systick_monotonic::Systick;
 
 use arrayvec::ArrayVec;
 use byteorder::{ByteOrder, LE};
+use rand_core::RngCore;
 
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpCidr, IpAddress, IpEndpoint};
@@ -26,7 +28,7 @@ use smoltcp::storage::PacketMetadata;
 
 use stm32_eth::{dma::{EthernetDMA, RxRingEntry, TxRingEntry}, Parts, PartsIn, EthPins};
 
-use stm_ethernet::{Leds, read_serno, read_rand};
+use stm_ethernet::{Leds, read_serno};
 
 const TIME_GRANULARITY: u32 = 1000;  // 1000 Hz granularity
 const PORT: u16 = 54321;
@@ -82,12 +84,12 @@ mod app {
     ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let p = cx.device;
-
-        setup_rng(&p);
         setup_10mhz(&p);
 
         let rcc = p.RCC.constrain();
         let clocks = rcc.cfgr.sysclk(180.MHz()).hclk(180.MHz()).freeze();
+
+        let rng = p.RNG.constrain(&clocks);
 
         let gpioa = p.GPIOA.split();
         let gpiob = p.GPIOB.split();
@@ -153,7 +155,7 @@ mod app {
 
         let udp_handle = sockets.add(udp_socket);
 
-        let gen = Generator::new(p.TIM2, leds);
+        let gen = Generator::new(p.TIM2, rng, leds);
 
         // use systick monotonic clock for now
         let mono = Systick::new(cx.core.SYST, clocks.sysclk().to_Hz());
@@ -238,6 +240,7 @@ mod app {
 struct Generator {
     endpoint: IpEndpoint,
     timer: TIM2,
+    rng: Rng,
     leds: Leds,
 
     mcpd_id: u8,
@@ -253,9 +256,9 @@ struct Generator {
 }
 
 impl Generator {
-    fn new(timer: TIM2, leds: Leds) -> Self {
+    fn new(timer: TIM2, rng: Rng, leds: Leds) -> Self {
         // default rate: 1000 events/sec
-        Generator { timer, leds, endpoint: (IpAddress::v4(0, 0, 0, 0), PORT).into(),
+        Generator { timer, leds, rng, endpoint: (IpAddress::v4(0, 0, 0, 0), PORT).into(),
                     mcpd_id: 0, run_id: 0, interval: 10_000, pkt_interval: 100_000,
                     buf_no: 0, time: 0, lastpkt: 0, run: false, npkt: [0; MAX_PER_PKT+1] }
     }
@@ -473,7 +476,7 @@ impl Generator {
                 let mut offset = 42 + 2;
                 for _ in 0..nevents {
                     let (y, x) = loop {
-                        let random = read_rand();
+                        let random = self.rng.next_u32();
                         let y = (random >> 22) as u16;
                         if y < 960 {
                             break (y, random as u16 & 0b11100111);
@@ -517,11 +520,6 @@ impl Generator {
             }
         }
     }
-}
-
-fn setup_rng(p: &Peripherals) {
-    p.RCC.ahb2enr.modify(|_, w| w.rngen().set_bit());
-    p.RNG.cr.modify(|_, w| w.rngen().set_bit());
 }
 
 fn setup_10mhz(p: &Peripherals) {

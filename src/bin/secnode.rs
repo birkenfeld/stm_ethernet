@@ -9,7 +9,6 @@ use stm32f4xx_hal::{
     self as hal,
     prelude::*,
     gpio::GpioExt,
-    pac::Peripherals,
     rcc::RccExt,
 };
 use systick_monotonic::Systick;
@@ -76,8 +75,6 @@ mod app {
     ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let p = cx.device;
-
-        setup_rng(&p);
 
         let rcc = p.RCC.constrain();
         let clocks = rcc.cfgr.sysclk(180.MHz()).hclk(180.MHz()).freeze();
@@ -284,11 +281,6 @@ mod app {
         });
         poll::spawn_after(500.millis().into()).unwrap();
     }
-}
-
-fn setup_rng(p: &Peripherals) {
-    p.RCC.ahb2enr.modify(|_, w| w.rngen().set_bit());
-    p.RNG.cr.modify(|_, w| w.rngen().set_bit());
 }
 
 struct Writer<'w, 's>(&'w mut TcpSocket<'s>);

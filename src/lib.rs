@@ -4,7 +4,6 @@ pub mod secnode;
 
 use stm32f4xx_hal::{
     gpio::{ErasedPin, Output},
-    pac::RNG,
 };
 
 pub struct Leds {
@@ -30,12 +29,5 @@ pub fn read_serno() -> u32 {
         *(0x1FFF_7A10 as *const u32) ^
         *(0x1FFF_7A14 as *const u32) ^
         *(0x1FFF_7A18 as *const u32)
-    }
-}
-
-pub fn read_rand() -> u32 {
-    // read a random number from the hardware generator
-    unsafe {
-        (*RNG::ptr()).dr.read().bits()
     }
 }
