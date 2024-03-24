@@ -23,7 +23,6 @@ panic-probe = { version = "0.3", features = ["print-defmt"] }
 # utilities
 arrayvec = { version = "0.7", default-features = false }
 byteorder = { version = "1.2", default-features = false }
-rand_core = "0.6"
 
 [dependencies.stm32-eth]
 # git = "https://github.com/stm32-rs/stm32-eth"

@@ -17,10 +17,10 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpCidr, IpAddress};
 use smoltcp::iface::{SocketSet, SocketHandle, Config, Interface, SocketStorage};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState};
-use smoltcp::socket::udp::{Socket as UdpSocket, PacketBuffer as UdpPacketBuffer, UdpMetadata};
+// use smoltcp::socket::udp::{Socket as UdpSocket, PacketBuffer as UdpPacketBuffer, UdpMetadata};
 use smoltcp::socket::dhcpv4::{Socket as DhcpSocket, Event as DhcpEvent};
 use smoltcp::wire::DhcpRepr;
-use smoltcp::storage::PacketMetadata;
+// use smoltcp::storage::PacketMetadata;
 
 use stm32_eth::{dma::{EthernetDMA, RxRingEntry, TxRingEntry}, Parts, PartsIn, EthPins};
 
@@ -30,12 +30,12 @@ use stm_ethernet::secnode::{self, SecNode};
 const TIME_GRANULARITY: u32 = 1000;  // 1000 Hz granularity
 const PORT: u16 = 10767;
 
-const NTP_PORT: u16 = 123;
-// Simple packet requesting current timestamp
-const NTP_REQUEST: &[u8] = b"\xE3\x00\x06\xEC\x00\x00\x00\x00\x00\x00\x00\x00\
-                             \x31\x4E\x31\x34\x00\x00\x00\x00\x00\x00\x00\x00\
-                             \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
-                             \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+// const NTP_PORT: u16 = 123;
+// // Simple packet requesting current timestamp
+// const NTP_REQUEST: &[u8] = b"\xE3\x00\x06\xEC\x00\x00\x00\x00\x00\x00\x00\x00\
+//                              \x31\x4E\x31\x34\x00\x00\x00\x00\x00\x00\x00\x00\
+//                              \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\
+//                              \x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
 
 #[rtic::app(
     device = crate::hal::pac,

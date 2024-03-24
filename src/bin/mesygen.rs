@@ -12,12 +12,12 @@ use stm32f4xx_hal::{
     pac::{Peripherals, TIM2},
     rcc::RccExt,
     rng::Rng,
+    pac::RNG,
 };
 use systick_monotonic::Systick;
 
 use arrayvec::ArrayVec;
 use byteorder::{ByteOrder, LE};
-use rand_core::RngCore;
 
 use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpCidr, IpAddress, IpEndpoint};
@@ -240,7 +240,7 @@ mod app {
 struct Generator {
     endpoint: IpEndpoint,
     timer: TIM2,
-    rng: Rng,
+    _rng: Rng, // not used, but proof that Rng is initialized
     leds: Leds,
 
     mcpd_id: u8,
@@ -256,9 +256,9 @@ struct Generator {
 }
 
 impl Generator {
-    fn new(timer: TIM2, rng: Rng, leds: Leds) -> Self {
+    fn new(timer: TIM2, _rng: Rng, leds: Leds) -> Self {
         // default rate: 1000 events/sec
-        Generator { timer, leds, rng, endpoint: (IpAddress::v4(0, 0, 0, 0), PORT).into(),
+        Generator { timer, leds, _rng, endpoint: (IpAddress::v4(0, 0, 0, 0), PORT).into(),
                     mcpd_id: 0, run_id: 0, interval: 10_000, pkt_interval: 100_000,
                     buf_no: 0, time: 0, lastpkt: 0, run: false, npkt: [0; MAX_PER_PKT+1] }
     }
@@ -476,7 +476,9 @@ impl Generator {
                 let mut offset = 42 + 2;
                 for _ in 0..nevents {
                     let (y, x) = loop {
-                        let random = self.rng.next_u32();
+                        // We don't care to get a new value every time,
+                        // just make it fast.
+                        let random = unsafe { (*RNG::ptr()).dr.read().bits() };
                         let y = (random >> 22) as u16;
                         if y < 960 {
                             break (y, random as u16 & 0b11100111);
