@@ -37,9 +37,11 @@ features = ["defmt", "medium-ethernet", "proto-ipv4", "proto-dhcpv4",
 
 [dependencies.usecop]
 git = "https://github.com/SampleEnvironment/microSECoP"
+# path = "../microSECoP"
 
 [dependencies.usecop-derive]
 git = "https://github.com/SampleEnvironment/microSECoP"
+# path = "../microSECoP/derive"
 
 # cargo build/run
 [profile.dev]

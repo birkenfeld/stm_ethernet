@@ -29,7 +29,7 @@ use stm_ethernet::secnode::{self, SecNode};
 
 const TIME_GRANULARITY: u32 = 1000;  // 1000 Hz granularity
 const PORT: u16 = 10767;
-const MAX_CLIENTS: usize = 1;
+const MAX_CLIENTS: usize = 5;
 
 // const NTP_PORT: u16 = 123;
 // // Simple packet requesting current timestamp
@@ -52,7 +52,7 @@ mod app {
     struct Shared {
         node: SecNode<MAX_CLIENTS>,
         net: Net<TIME_GRANULARITY>,
-        sock: SocketHandle,
+        handles: [SocketHandle; MAX_CLIENTS],
         use_dhcp: bool,
     }
 
@@ -62,10 +62,10 @@ mod app {
     }
 
     #[init(local = [
-        rx_ring: [RxRingEntry; 16] = [RxRingEntry::RX_INIT; 16],
-        tx_ring: [TxRingEntry; 4] = [TxRingEntry::INIT; 4],
-        rx_buffer: [u8; 1500*16] = [0; 1500*16],
-        tx_buffer: [u8; 1500*16] = [0; 1500*16],
+        rx_ring: [RxRingEntry; 2*MAX_CLIENTS] = [RxRingEntry::RX_INIT; 2*MAX_CLIENTS],
+        tx_ring: [TxRingEntry; 2*MAX_CLIENTS] = [TxRingEntry::INIT; 2*MAX_CLIENTS],
+        rx_buffers: [[u8; 1500*4]; MAX_CLIENTS] = [[0; 1500*4]; MAX_CLIENTS],
+        tx_buffers: [[u8; 1500*4]; MAX_CLIENTS] = [[0; 1500*4]; MAX_CLIENTS],
         sockets_storage: [SocketStorage<'static>; MAX_CLIENTS] = [SocketStorage::EMPTY; MAX_CLIENTS],
     ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
@@ -130,13 +130,13 @@ mod app {
         // set up buffers for packet content and metadata
 
         // create the UDP socket
-        let tcp_socket = TcpSocket::new(
-            TcpSocketBuffer::new(&mut cx.local.rx_buffer[..]),
-            TcpSocketBuffer::new(&mut cx.local.tx_buffer[..])
-        );
         let mut sockets = SocketSet::new(&mut cx.local.sockets_storage[..]);
-
-        let tcp_handle = sockets.add(tcp_socket);
+        let mut handles = [SocketHandle::default(); MAX_CLIENTS];
+        for (i, (txb, rxb)) in cx.local.tx_buffers.iter_mut().zip(cx.local.rx_buffers.iter_mut()).enumerate() {
+            let tcp_socket = TcpSocket::new(TcpSocketBuffer::new(&mut rxb[..]),
+                                            TcpSocketBuffer::new(&mut txb[..]));
+            handles[i] = sockets.add(tcp_socket);
+        }
 
         let node = secnode::create();
 
@@ -150,7 +150,7 @@ mod app {
             start::spawn().unwrap();
         }
         let net = Net { sockets, iface, dma, ntp_time: None };
-        (Shared { node, net, sock: tcp_handle, use_dhcp },
+        (Shared { node, net, handles, use_dhcp },
          Local { leds },
          init::Monotonics(mono))
     }
@@ -214,29 +214,32 @@ mod app {
         start::spawn().unwrap();
     }
 
-    #[task(shared = [net, &sock, &use_dhcp])]
+    #[task(shared = [net, &handles, &use_dhcp])]
     fn start(cx: start::Context) {
-        let start::SharedResources { mut net, sock, use_dhcp } = cx.shared;
+        let start::SharedResources { mut net, handles, use_dhcp } = cx.shared;
 
         net.lock(|net| {
             let ip_addr = net.iface.ipv4_addr().unwrap();
             info!("IP setup done ({}), binding to {}:{}",
                   if *use_dhcp { "dhcp" } else { "static" }, ip_addr, PORT);
 
-            let socket = net.sockets.get_mut::<TcpSocket>(*sock);
-            socket.set_nagle_enabled(false);
-            socket.listen(PORT).unwrap();
+            for &handle in handles {
+                let socket = net.sockets.get_mut::<TcpSocket>(handle);
+                socket.set_nagle_enabled(false);
+                socket.listen(PORT).unwrap();
+            }
 
             net.dma.enable_interrupt();
         });
         poll::spawn_after(500.millis().into()).unwrap();
     }
 
-    #[task(binds = ETH, local = [leds, connected: bool = false],
-           shared = [node, net, &sock])]
+    #[task(binds = ETH,
+           local = [leds, connected: [bool; MAX_CLIENTS] = [false; MAX_CLIENTS]],
+           shared = [node, net, &handles])]
     fn eth(cx: eth::Context) {
         let eth::LocalResources { leds, connected } = cx.local;
-        let eth::SharedResources { node, net, sock } = cx.shared;
+        let eth::SharedResources { node, net, handles } = cx.shared;
         let mut buf = [0; 1024];
 
         let _reason = stm32_eth::eth_interrupt_handler();
@@ -246,55 +249,61 @@ mod app {
             let now = monotonics::now();
             net.poll(now);
             let time = net.get_time(now);
-            let socket = net.sockets.get_mut::<TcpSocket>(*sock);
 
-            if socket.is_active() {
-                if !*connected {
-                    *connected = true;
-                    node.client_connected(0);
-                    leds.set(false, true, true);
-                }
-            } else if *connected {
-                *connected = false;
-                node.client_finished(0);
-                leds.set(false, true, false);
-            }
+            for (i, &handle) in handles.iter().enumerate() {
+                let socket = net.sockets.get_mut::<TcpSocket>(handle);
 
-            if let Ok(recv_bytes) = socket.recv_slice(&mut buf) {
-                if recv_bytes > 0 {
-                    info!("Got {} bytes", recv_bytes);
-                    let result = node.process(
-                        time, &mut buf[..recv_bytes],
-                        0 as usecop::ClientId,
-                        |_, callback: &dyn Fn(&mut dyn usecop::io::Write)| {
-                            callback(&mut Writer(socket));
-                        }
-                    );
-                    if let Err(e) = result {
-                        warn!("Error processing data: {:?}", e);
+                if socket.is_active() {
+                    if !connected[i] {
+                        connected[i] = true;
+                        node.client_connected(i);
+                        leds.set(false, true, true);
+                    }
+                } else if connected[i] {
+                    connected[i] = false;
+                    node.client_finished(i);
+                    leds.set(false, true, false);
+
+                    if !socket.is_listening() && !socket.is_open() || socket.state() == TcpState::CloseWait {
+                        socket.abort();
+                        socket.listen(PORT).ok();
+                        warn!("Disconnected... Reopening listening socket.");
                     }
                 }
-            }
 
-            if !socket.is_listening() && !socket.is_open() || socket.state() == TcpState::CloseWait {
-                socket.abort();
-                socket.listen(PORT).ok();
-                warn!("Disconnected... Reopening listening socket.");
+                if let Ok(recv_bytes) = socket.recv_slice(&mut buf) {
+                    if recv_bytes > 0 {
+                        info!("Got {} bytes on socket {}", recv_bytes, i);
+                        let result = node.process(
+                            time, &mut buf[..recv_bytes],
+                            i as usecop::ClientId,
+                            |sn, callback: &dyn Fn(&mut dyn usecop::io::Write)| {
+                                info!("writeback on socket {}", sn);
+                                let socket = net.sockets.get_mut::<TcpSocket>(handles[sn]);
+                                callback(&mut Writer(socket));
+                            }
+                        );
+                        if result.is_err() {
+                            warn!("Error processing data");
+                        }
+                    }
+                }
             }
 
             net.poll(monotonics::now());
         });
     }
 
-    #[task(shared = [node, net, &sock])]
+    #[task(shared = [node, net, &handles])]
     fn poll(cx: poll::Context) {
-        let poll::SharedResources { node, net, sock } = cx.shared;
+        let poll::SharedResources { node, net, handles } = cx.shared;
 
         (node, net).lock(|node, net| {
             let now = monotonics::now();
             let time = net.get_time(now);
-            node.poll(time, |_, callback: &dyn Fn(&mut dyn usecop::io::Write)| {
-                let socket = net.sockets.get_mut::<TcpSocket>(*sock);
+            node.poll(time, |sn, callback: &dyn Fn(&mut dyn usecop::io::Write)| {
+                info!("poll writeback on socket {}", sn);
+                let socket = net.sockets.get_mut::<TcpSocket>(handles[sn]);
                 callback(&mut Writer(socket));
             });
             net.poll(now);
