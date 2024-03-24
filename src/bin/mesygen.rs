@@ -250,7 +250,7 @@ impl Generator {
 
     fn process_command(&mut self, sock: &mut UdpSocket, msg: &[u8], ep: IpEndpoint) {
         // parse body: all command buffers end in 0xffff
-        let req_body = msg[20..].chunks(2).map(|c| LE::read_u16(c))
+        let req_body = msg[20..].chunks(2).map(LE::read_u16)
                                           .take_while(|&v| v != 0xffff)
                                           .collect::<ArrayVec<u16, 32>>();
         let mut body = ArrayVec::<u16, 24>::new();
@@ -272,9 +272,7 @@ impl Generator {
             }
             32 => { // read MCPD register
                 info!("Read MCPD register: {:?}", req_body[..]);
-                if req_body[0] == 1 && req_body[1] == 102 {
-                    body.push(1); body.push(102); body.push(2);
-                } else if req_body[0] == 1 && req_body[1] == 103 {
+                if matches!(req_body[..], [1, 102 | 103, ..]) {
                     body.push(1); body.push(102); body.push(2);
                 }
             }
