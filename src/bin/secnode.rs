@@ -17,10 +17,10 @@ use smoltcp::time::Instant;
 use smoltcp::wire::{EthernetAddress, IpCidr, IpAddress};
 use smoltcp::iface::{SocketSet, SocketHandle, Config, Interface, SocketStorage};
 use smoltcp::socket::tcp::{Socket as TcpSocket, SocketBuffer as TcpSocketBuffer, State as TcpState};
-// use smoltcp::socket::udp::{Socket as UdpSocket, PacketBuffer as UdpPacketBuffer, UdpMetadata};
+use smoltcp::socket::udp::{Socket as UdpSocket, PacketBuffer as UdpPacketBuffer};
 use smoltcp::socket::dhcpv4::{Socket as DhcpSocket, Event as DhcpEvent};
+use smoltcp::storage::PacketMetadata;
 use smoltcp::wire::DhcpRepr;
-// use smoltcp::storage::PacketMetadata;
 
 use stm32_eth::{dma::{RxRingEntry, TxRingEntry}, Parts, PartsIn, EthPins};
 
@@ -29,6 +29,7 @@ use stm_ethernet::secnode::{self, SecNode};
 
 const TIME_GRANULARITY: u32 = 1000;  // 1000 Hz granularity
 const PORT: u16 = 10767;
+const MAX_CLIENTS: usize = 1;
 
 // const NTP_PORT: u16 = 123;
 // // Simple packet requesting current timestamp
@@ -47,13 +48,9 @@ mod app {
     #[monotonic(binds = SysTick, default = true)]
     type Time = Systick<TIME_GRANULARITY>;
 
-    fn millis() -> i64 {
-        monotonics::now().ticks() as i64
-    }
-
     #[shared]
     struct Shared {
-        node: SecNode<1>,
+        node: SecNode<MAX_CLIENTS>,
         net: Net<TIME_GRANULARITY>,
         sock: SocketHandle,
         use_dhcp: bool,
@@ -69,7 +66,7 @@ mod app {
         tx_ring: [TxRingEntry; 4] = [TxRingEntry::INIT; 4],
         rx_buffer: [u8; 1500*16] = [0; 1500*16],
         tx_buffer: [u8; 1500*16] = [0; 1500*16],
-        sockets_storage: [SocketStorage<'static>; 2] = [SocketStorage::EMPTY; 2],
+        sockets_storage: [SocketStorage<'static>; MAX_CLIENTS] = [SocketStorage::EMPTY; MAX_CLIENTS],
     ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let p = cx.device;
@@ -162,17 +159,33 @@ mod app {
     fn dhcp(mut cx: dhcp::Context) {
         // give the remote partner time to realize the link is up,
         // so we don't run into the 10sec DHCP discover interval
-        while millis() < 2000 { }
+        while monotonics::now().ticks() < 2000 { }
+
+        info!("Starting DHCP");
+
+        let mut storage = [SocketStorage::EMPTY; 2];
+        let mut sockets = SocketSet::new(&mut storage[..]);
+
+        let dhcp_socket = DhcpSocket::new();
+        let dhcp_handle = sockets.add(dhcp_socket);
+
+        let mut rx_buf = [0; 1500];
+        let mut tx_buf = [0; 1500];
+        let mut rx_meta_buf = [PacketMetadata::EMPTY; 1];
+        let mut tx_meta_buf = [PacketMetadata::EMPTY; 1];
+        let ntp_socket = UdpSocket::new(
+            UdpPacketBuffer::new(&mut rx_meta_buf[..], &mut rx_buf[..]),
+            UdpPacketBuffer::new(&mut tx_meta_buf[..], &mut tx_buf[..])
+        );
+        let _ntp_handle = sockets.add(ntp_socket);
 
         cx.shared.net.lock(|net| {
-            info!("Starting DHCP");
-            let dhcp_socket = DhcpSocket::new();
-            let dhcp_handle = net.sockets.add(dhcp_socket);
+            // use a dedicated socket storage here, we don't need them later
             // let mut ntp_addr = None;
 
             loop {
-                let time = Instant::from_millis(millis());
-                net.iface.poll(time, &mut &mut net.dma, &mut net.sockets);
+                let time = Instant::from_millis(monotonics::now().ticks() as i64);
+                net.iface.poll(time, &mut &mut net.dma, &mut sockets);
 
                 let event = net.sockets.get_mut::<DhcpSocket>(dhcp_handle).poll();
                 if let Some(DhcpEvent::Configured(config)) = event {
@@ -197,23 +210,6 @@ mod app {
                     break;
                 }
             }
-
-            // let mut rx_buf = [0; 1500];
-            // let mut tx_buf = [0; 1500];
-            // let mut rx_meta_buf = [PacketMetadata::EMPTY; 1];
-            // let mut tx_meta_buf = [PacketMetadata::EMPTY; 1];
-
-            // let ntp_socket = UdpSocket::new(
-            //     UdpPacketBuffer::new(&mut rx_meta_buf[..], &mut rx_buf[..]),
-            //     UdpPacketBuffer::new(&mut tx_meta_buf[..], &mut tx_buf[..])
-            // );
-            // let mut storage = [SocketStorage::EMPTY];
-            // let mut sockets = SocketSet::new(&mut storage[..]);
-            // sockets.add(ntp_socket);
-
-            // while millis() < 10000 {
-                
-            // }
         });
         start::spawn().unwrap();
     }
