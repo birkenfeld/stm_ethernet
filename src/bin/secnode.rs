@@ -22,9 +22,9 @@ use smoltcp::socket::dhcpv4::{Socket as DhcpSocket, Event as DhcpEvent};
 use smoltcp::wire::DhcpRepr;
 // use smoltcp::storage::PacketMetadata;
 
-use stm32_eth::{dma::{EthernetDMA, RxRingEntry, TxRingEntry}, Parts, PartsIn, EthPins};
+use stm32_eth::{dma::{RxRingEntry, TxRingEntry}, Parts, PartsIn, EthPins};
 
-use stm_ethernet::{Leds, read_serno};
+use stm_ethernet::{Leds, Net, read_serno};
 use stm_ethernet::secnode::{self, SecNode};
 
 const TIME_GRANULARITY: u32 = 1000;  // 1000 Hz granularity
@@ -51,33 +51,10 @@ mod app {
         monotonics::now().ticks() as i64
     }
 
-    pub struct Net {
-        sockets: SocketSet<'static>,
-        iface: Interface,
-        dma: EthernetDMA<'static, 'static>,
-        ntp_time: Option<f64>,
-    }
-
-    impl Net {
-        fn poll(&mut self) {
-            let time = Instant::from_millis(millis());
-            self.iface.poll(time, &mut &mut self.dma, &mut self.sockets);
-        }
-
-        fn get_time(&self) -> usecop::Timestamp {
-            let ticks = monotonics::now().ticks() as f64 / TIME_GRANULARITY as f64;
-            if let Some(epoch) = self.ntp_time {
-                usecop::Timestamp::Abs(epoch + ticks)
-            } else {
-                usecop::Timestamp::Rel(ticks)
-            }
-        }
-    }
-
     #[shared]
     struct Shared {
         node: SecNode<1>,
-        net: Net,
+        net: Net<TIME_GRANULARITY>,
         sock: SocketHandle,
         use_dhcp: bool,
     }
@@ -270,9 +247,9 @@ mod app {
         // debug!("Got an ethernet interrupt! Reason: {}", _reason);
 
         (node, net).lock(|node, net| {
-            net.poll();
-
-            let time = net.get_time();
+            let now = monotonics::now();
+            net.poll(now);
+            let time = net.get_time(now);
             let socket = net.sockets.get_mut::<TcpSocket>(*sock);
 
             if socket.is_active() {
@@ -309,7 +286,7 @@ mod app {
                 warn!("Disconnected... Reopening listening socket.");
             }
 
-            net.poll();
+            net.poll(monotonics::now());
         });
     }
 
@@ -318,12 +295,13 @@ mod app {
         let poll::SharedResources { node, net, sock } = cx.shared;
 
         (node, net).lock(|node, net| {
-            let time = net.get_time();
+            let now = monotonics::now();
+            let time = net.get_time(now);
             node.poll(time, |_, callback: &dyn Fn(&mut dyn usecop::io::Write)| {
                 let socket = net.sockets.get_mut::<TcpSocket>(*sock);
                 callback(&mut Writer(socket));
             });
-            net.poll();
+            net.poll(now);
         });
         poll::spawn_after(500.millis().into()).unwrap();
     }

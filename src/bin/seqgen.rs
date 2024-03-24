@@ -20,17 +20,9 @@ use smoltcp::socket::udp::{Socket as UdpSocket, PacketBuffer as UdpPacketBuffer,
 use smoltcp::socket::dhcpv4::{Socket as DhcpSocket, Event as DhcpEvent};
 use smoltcp::storage::PacketMetadata;
 
-use stm32_eth::{dma::{RxRingEntry, TxRingEntry, EthernetDMA}, Parts, PartsIn, EthPins};
+use stm32_eth::{dma::{RxRingEntry, TxRingEntry}, Parts, PartsIn, EthPins};
 
-use stm_ethernet::{Leds, read_serno};
-
-fn monotonic_millis() -> u32 {
-    app::monotonics::now()
-        .duration_since_epoch()
-        .to_millis()
-        .try_into()
-        .unwrap()
-}
+use stm_ethernet::{Leds, Net, read_serno};
 
 const TIME_GRANULARITY: u32 = 1000;  // 1000 Hz granularity
 const PORT: u16 = 50000;
@@ -47,9 +39,7 @@ mod app {
 
     #[shared]
     struct Shared {
-        sockets: SocketSet<'static>,
-        iface: Interface,
-        dma: EthernetDMA<'static, 'static>,
+        net: Net<TIME_GRANULARITY>,
         use_dhcp: bool,
     }
 
@@ -143,37 +133,33 @@ mod app {
         } else {
             main::spawn().unwrap();
         }
-        (Shared { sockets, iface, dma, use_dhcp },
-         Local { leds, udp_handle },
-         init::Monotonics(mono))
+        let net = Net { sockets, iface, dma, ntp_time: None };
+        (Shared { net, use_dhcp }, Local { leds, udp_handle }, init::Monotonics(mono))
     }
 
-    #[task(shared = [sockets, iface, dma])]
-    fn dhcp(cx: dhcp::Context) {
-        let dhcp::SharedResources { sockets, iface, dma } = cx.shared;
-
+    #[task(shared = [net])]
+    fn dhcp(mut cx: dhcp::Context) {
         // give the remote partner time to realize the link is up,
         // so we don't run into the 10sec DHCP discover interval
-        while monotonic_millis() < 2000 { }
+        while monotonics::now().ticks() < 2000 { }
 
-        (sockets, iface, dma).lock(|sockets, iface, mut dma| {
+        cx.shared.net.lock(|net| {
             info!("Starting DHCP");
             let dhcp_socket = DhcpSocket::new();
-            let dhcp_handle = sockets.add(dhcp_socket);
+            let dhcp_handle = net.sockets.add(dhcp_socket);
 
             loop {
-                let time = Instant::from_millis(monotonic_millis());
-                iface.poll(time, &mut dma, sockets);
+                net.poll(monotonics::now());
 
-                let event = sockets.get_mut::<DhcpSocket>(dhcp_handle).poll();
+                let event = net.sockets.get_mut::<DhcpSocket>(dhcp_handle).poll();
                 if let Some(DhcpEvent::Configured(config)) = event {
                     let addr = config.address;
-                    iface.update_ip_addrs(|addrs| addrs.push(addr.into()).unwrap());
+                    net.iface.update_ip_addrs(|addrs| addrs.push(addr.into()).unwrap());
 
                     if let Some(router) = config.router {
-                        iface.routes_mut().add_default_ipv4_route(router).unwrap();
+                        net.iface.routes_mut().add_default_ipv4_route(router).unwrap();
                     } else {
-                        iface.routes_mut().remove_default_ipv4_route();
+                        net.iface.routes_mut().remove_default_ipv4_route();
                     }
 
                     break;
@@ -184,24 +170,24 @@ mod app {
         main::spawn().unwrap();
     }
 
-    #[task(local = [leds, udp_handle], shared = [sockets, iface, dma, &use_dhcp])]
+    #[task(local = [leds, udp_handle], shared = [net, &use_dhcp])]
     fn main(cx: main::Context) {
         let main::LocalResources { leds, udp_handle } = cx.local;
-        let main::SharedResources { sockets, iface, dma, use_dhcp } = cx.shared;
+        let main::SharedResources { mut net, use_dhcp } = cx.shared;
         let mut target = None;
         let mut seq_number = 0u32;
 
-        (sockets, iface, dma).lock(|sockets, iface, mut dma| {
-            let ip_addr = iface.ipv4_addr().unwrap();
+        net.lock(|net| {
+            let ip_addr = net.iface.ipv4_addr().unwrap();
             info!("IP setup done ({}), binding to {}:{}",
                   if *use_dhcp { "dhcp" } else { "static" }, ip_addr, PORT);
-            sockets.get_mut::<UdpSocket>(*udp_handle).bind((ip_addr, PORT)).unwrap();
+            net.sockets.get_mut::<UdpSocket>(*udp_handle).bind((ip_addr, PORT)).unwrap();
             leds.set(false, true, false);
 
             loop {
                 // process packets
                 {
-                    let socket = sockets.get_mut::<UdpSocket>(*udp_handle);
+                    let socket = net.sockets.get_mut::<UdpSocket>(*udp_handle);
                     while let Ok((msg, ep)) = socket.recv() {
                         if msg == b"start" {
                             info!("got start message");
@@ -226,8 +212,7 @@ mod app {
                     }
                 }
                 // handle ethernet
-                let time = Instant::from_millis(monotonic_millis());
-                iface.poll(time, &mut dma, sockets);
+                net.poll(monotonics::now());
             }
         });
     }

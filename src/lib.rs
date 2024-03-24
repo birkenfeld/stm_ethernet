@@ -2,9 +2,11 @@
 
 pub mod secnode;
 
-use stm32f4xx_hal::{
-    gpio::{ErasedPin, Output},
-};
+use fugit::Instant;
+use stm32f4xx_hal::gpio::{ErasedPin, Output};
+use smoltcp::iface::{SocketSet, Interface};
+use smoltcp::time::Instant as SmoltcpInstant;
+use stm32_eth::dma::EthernetDMA;
 
 pub struct Leds {
     r: ErasedPin<Output>,
@@ -29,5 +31,28 @@ pub fn read_serno() -> u32 {
         *(0x1FFF_7A10 as *const u32) ^
         *(0x1FFF_7A14 as *const u32) ^
         *(0x1FFF_7A18 as *const u32)
+    }
+}
+
+pub struct Net<const TIME_GRANULARITY: u32> {
+    pub sockets: SocketSet<'static>,
+    pub iface: Interface,
+    pub dma: EthernetDMA<'static, 'static>,
+    pub ntp_time: Option<f64>,
+}
+
+impl<const TIME_GRANULARITY: u32> Net<TIME_GRANULARITY> {
+    pub fn poll<const NOM: u32, const DENOM: u32>(&mut self, now: Instant<u64, NOM, DENOM>) {
+        let time = SmoltcpInstant::from_millis(now.ticks() as i64);
+        self.iface.poll(time, &mut &mut self.dma, &mut self.sockets);
+    }
+
+    pub fn get_time<const NOM: u32, const DENOM: u32>(&self, now: Instant<u64, NOM, DENOM>) -> usecop::Timestamp {
+        let ticks = now.ticks() as f64 / TIME_GRANULARITY as f64;
+        if let Some(epoch) = self.ntp_time {
+            usecop::Timestamp::Abs(epoch + ticks)
+        } else {
+            usecop::Timestamp::Rel(ticks)
+        }
     }
 }
