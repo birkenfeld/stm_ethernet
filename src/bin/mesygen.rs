@@ -9,10 +9,9 @@ use stm32f4xx_hal::{
     self as hal,
     prelude::*,
     gpio::GpioExt,
-    pac::{Peripherals, TIM2},
+    pac::{RNG, TIM2},
     rcc::RccExt,
     rng::Rng,
-    pac::RNG,
 };
 use systick_monotonic::Systick;
 
@@ -74,7 +73,11 @@ mod app {
     ])]
     fn init(cx: init::Context) -> (Shared, Local, init::Monotonics) {
         let p = cx.device;
-        setup_10mhz(&p);
+
+        // set up 10 MHz counter
+        p.RCC.apb1enr.modify(|_, w| w.tim2en().set_bit());
+        p.TIM2.psc.write(|w| w.psc().bits(8)); // 90 MHz/9
+        p.TIM2.egr.write(|w| w.ug().set_bit());
 
         let rcc = p.RCC.constrain();
         let clocks = rcc.cfgr.sysclk(180.MHz()).hclk(180.MHz()).freeze();
@@ -505,10 +508,4 @@ impl Generator {
             }
         }
     }
-}
-
-fn setup_10mhz(p: &Peripherals) {
-    p.RCC.apb1enr.modify(|_, w| w.tim2en().set_bit());
-    p.TIM2.psc.write(|w| w.psc().bits(8)); // 90 MHz/9
-    p.TIM2.egr.write(|w| w.ug().set_bit());
 }
