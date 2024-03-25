@@ -1,7 +1,5 @@
 #![no_std]
 
-pub mod secnode;
-
 use fugit::Instant;
 use stm32f4xx_hal::gpio::{ErasedPin, Output};
 use smoltcp::iface::{SocketSet, Interface};
@@ -45,14 +43,5 @@ impl<const TIME_GRANULARITY: u32> Net<TIME_GRANULARITY> {
     pub fn poll<const NOM: u32, const DENOM: u32>(&mut self, now: Instant<u64, NOM, DENOM>) {
         let time = SmoltcpInstant::from_millis(now.ticks() as i64);
         self.iface.poll(time, &mut &mut self.dma, &mut self.sockets);
-    }
-
-    pub fn get_time<const NOM: u32, const DENOM: u32>(&self, now: Instant<u64, NOM, DENOM>) -> usecop::Timestamp {
-        let ticks = now.ticks() as f64 / TIME_GRANULARITY as f64;
-        if let Some(epoch) = self.ntp_time {
-            usecop::Timestamp::Abs(epoch + ticks)
-        } else {
-            usecop::Timestamp::Rel(ticks)
-        }
     }
 }

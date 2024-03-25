@@ -35,14 +35,6 @@ default-features = false
 features = ["defmt", "medium-ethernet", "proto-ipv4", "proto-dhcpv4",
             "socket-raw", "socket-icmp", "socket-udp", "socket-tcp", "socket-dhcpv4"]
 
-[dependencies.usecop]
-git = "https://github.com/SampleEnvironment/microSECoP"
-# path = "../microSECoP"
-
-[dependencies.usecop-derive]
-git = "https://github.com/SampleEnvironment/microSECoP"
-# path = "../microSECoP/derive"
-
 # cargo build/run
 [profile.dev]
 codegen-units = 1
