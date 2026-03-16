@@ -80,7 +80,10 @@ mod app {
         p.TIM2.egr.write(|w| w.ug().set_bit());
 
         let rcc = p.RCC.constrain();
-        let clocks = rcc.cfgr.sysclk(180.MHz()).hclk(180.MHz()).freeze();
+        let clocks = rcc.cfgr.sysclk(180.MHz())
+                             .hclk(180.MHz())
+                             .require_pll48clk()
+                             .freeze();
 
         let rng = p.RNG.constrain(&clocks);
 
@@ -101,8 +104,9 @@ mod app {
         let mdc = gpioc.pc1.into_alternate();
 
         // DHCP if user button pressed
-        let dhcp_btn = gpioc.pc13.into_pull_down_input();
-        let use_dhcp = dhcp_btn.is_high();
+        // let dhcp_btn = gpioc.pc13.into_pull_down_input();
+        // dhcp_btn.is_high();
+        let use_dhcp = true;
 
         let led_green = gpiob.pb0.into_push_pull_output();
         let led_blue = gpiob.pb7.into_push_pull_output();
@@ -307,6 +311,7 @@ impl Generator {
                 if self.endpoint.addr.is_unspecified() {
                     // to avoid needing reconfiguration of the IP all the time
                     self.endpoint = ep;
+                    self.endpoint.port = PORT+1;
                 }
                 self.start();
             }
@@ -383,6 +388,13 @@ impl Generator {
                 body.push(req_body[0]);
                 body.push(req_body[1]);
             }
+            24 => { // get module info
+                info!("Get module info");
+                body.push(req_body[0]); // mod id
+                body.push(7);
+                body.push(2);
+                body.push(0xcafe); // firmware version
+            }
             0xF1F0 => { // generator parameters -- generator specific command
                 let rate = (req_body[1] as u32) << 16 | req_body[0] as u32;
                 if rate == 0 {
@@ -408,7 +420,7 @@ impl Generator {
 
         // send back reply
         if let Ok(buf) = sock.send(20 + 2*body.len(), ep) {
-            LE::write_u16(&mut buf[0..], (10 + body.len()) as u16);
+            LE::write_u16(&mut buf[0..], (10 + body.len() - 1) as u16);
             buf[2..12].copy_from_slice(&msg[2..12]);
             LE::write_u16(&mut buf[12..], self.time as u16);
             LE::write_u16(&mut buf[14..], (self.time >> 16) as u16);
