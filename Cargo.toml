@@ -11,26 +11,26 @@ repository = "https://github.com/birkenfeld/stm_ethernet"
 # basic cortex-m support
 cortex-m = { version = "0.7.7", features = ["critical-section-single-core"] }
 cortex-m-rt = "0.7.3"
-stm32f4xx-hal = "0.20"
+stm32f4xx-hal = "0.21"
 # rtic
 cortex-m-rtic = "1.0"
 systick-monotonic = "1"
 fugit = "0.3"
 # debugging
 defmt = "0.3"
-defmt-rtt = "0.4"
-panic-probe = { version = "0.3", features = ["print-defmt"] }
+defmt-rtt = "1.0"
+panic-probe = { version = "1.0", features = ["print-defmt"] }
 # utilities
 arrayvec = { version = "0.7", default-features = false }
 byteorder = { version = "1.2", default-features = false }
 
 [dependencies.stm32-eth]
 # git = "https://github.com/stm32-rs/stm32-eth"
-version = "0.6"
+version = "0.8"
 features = ["smoltcp-phy", "stm32f429"]
 
 [dependencies.smoltcp]
-version = "0.11.0"
+version = "0.12.0"
 default-features = false
 features = ["defmt", "medium-ethernet", "proto-ipv4", "proto-dhcpv4",
             "socket-raw", "socket-icmp", "socket-udp", "socket-tcp", "socket-dhcpv4"]

@@ -271,6 +271,13 @@ impl Generator {
                 info!("Set bus mode: {:?}", req_body[..]);
                 body.push(2);  // TOF + Pos/Amp selected
             }
+            24 => { // get module info
+                info!("Get module info");
+                body.push(req_body[0]); // mod id
+                body.push(7);
+                body.push(2);
+                body.push(0xcafe); // firmware version
+            }
             31 => { // write MCPD register
                 info!("Write MCPD register: {:?}", req_body[..]);
                 if req_body[0] == 1 && req_body[1] == 103 {
@@ -321,29 +328,28 @@ impl Generator {
             5 => { // set protocol parameters
                 info!("Set protocol parameters");
                 if req_body[0] != 0 {
-                    info!("  requested IP change to {}.{}.{}.{}",
+                    info!("  (not impl) requested IP change to {}.{}.{}.{}",
                           req_body[0], req_body[1], req_body[2], req_body[3]);
                 }
-                if req_body[4] != 0 {
+                if req_body[4] == 0 && req_body[5] == 0 {
+                    info!("  events go to sender");
+                    self.endpoint = ep;
+                } else if req_body[4] != 0 {
                     let port = if req_body[9] != 0 { req_body[9] } else { 54321 };
-                    info!("  events should go to {}.{}.{}.{}:{}",
+                    info!("  events go to {}.{}.{}.{}:{}",
                           req_body[4], req_body[5], req_body[6], req_body[7], port);
                     self.endpoint = (IpAddress::v4(req_body[4] as u8,
                                                    req_body[5] as u8,
                                                    req_body[6] as u8,
                                                    req_body[7] as u8), port).into();
                 }
-                if req_body[4] == 0 && req_body[5] == 0 {
-                    info!("  events should go to sender");
-                    self.endpoint = ep;
-                }
                 if req_body[10] != 0 {
-                    info!("  accept commands only from {}.{}.{}.{}:{}",
+                    info!("  (not impl) accept commands only from {}.{}.{}.{}:{}",
                           req_body[10], req_body[11], req_body[12], req_body[13],
                           if req_body[8] != 0 { req_body[8] } else { 54321 });
                 }
                 if req_body[10] == 0 && req_body[11] == 0 {
-                    info!("  accept commands only from sender");
+                    info!("  (not impl) accept commands only from sender");
                 }
             }
             6 => { // set timing setup
@@ -373,27 +379,20 @@ impl Generator {
                 }
             }
             13 => { // set gain
-                info!("set gain: {:?}", req_body[..]);
+                info!("Set gain: {:?}", req_body[..]);
                 body.push(req_body[0]);
                 body.push(req_body[1]);
                 body.push(req_body[2]);
             }
             14 => { // set threshhold
-                info!("Set threshhold: {:?}", req_body[..]);
+                info!("Set threshold: {:?}", req_body[..]);
                 body.push(req_body[0]);
                 body.push(req_body[1]);
             }
             16 => { // set mode
-                info!("Set threshhold: {:?}", req_body[..]);
+                info!("Set mode: {:?}", req_body[..]);
                 body.push(req_body[0]);
                 body.push(req_body[1]);
-            }
-            24 => { // get module info
-                info!("Get module info");
-                body.push(req_body[0]); // mod id
-                body.push(7);
-                body.push(2);
-                body.push(0xcafe); // firmware version
             }
             0xF1F0 => { // generator parameters -- generator specific command
                 let rate = (req_body[1] as u32) << 16 | req_body[0] as u32;

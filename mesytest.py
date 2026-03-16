@@ -17,6 +17,7 @@ except (ValueError, IndexError):
 sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 sock.bind(('', PORT))
 send_cmd(sock, addr, 0xF1F0, 'IH', rate, 0)
+send_cmd(sock, addr, 5, '28x')  # just zeros
 print('configure ok')
 
 
